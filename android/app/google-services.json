@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "48332235607",
+    "project_id": "realtime-answerdetector",
+    "storage_bucket": "realtime-answerdetector.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:48332235607:android:471c23e251560511809412",
+        "android_client_info": {
+          "package_name": "com.example.realtime_answer_detector"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD-weJeuC4X0JJkAaWddO_OEER4UN7F3bI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
