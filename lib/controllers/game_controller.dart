@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 
@@ -10,7 +11,8 @@ class GameController extends ChangeNotifier {
   int _questionCount = 0;
   Timer? _timer;
   bool _isGameActive = false;
-  bool _isListening = false; // Controls the "Start" state
+  bool _isListening = false;
+  bool _hasStarted = false; // Prevents listening before the first play button tap
 
   // Game Settings
   int _digits = 1;
@@ -27,7 +29,13 @@ class GameController extends ChangeNotifier {
 
   Future<bool> initializeSpeech() async {
     bool available = await _speech.initialize(
-      onStatus: (status) => debugPrint('Speech status: $status'),
+      onStatus: (status) {
+        debugPrint('Speech status: $status');
+        if (status == 'done' || status == 'notListening') {
+          _isListening = false;
+          notifyListeners();
+        }
+      },
       onError: (errorNotification) => debugPrint('Speech error: $errorNotification'),
     );
     return available;
@@ -39,12 +47,19 @@ class GameController extends ChangeNotifier {
     _score = 0;
     _questionCount = 0;
     _isGameActive = true;
-    _isListening = false; // Wait for user to press Mic
+    _isListening = false;
+    _hasStarted = false; // Standby mode until Play is pressed
     _generateNewNumberOnly();
   }
 
-  // Generate number but DON'T start timer yet
-  void _generateNewNumberOnly() {
+  /// Triggered ONLY by the UI Play Button
+  void pressPlayButton() {
+    if (!_isGameActive) return;
+    _hasStarted = true;
+    startListening();
+  }
+
+  void _generateNewNumberOnly() async {
     if (_questionCount >= _maxQuestions) {
       _stopGame();
       return;
@@ -64,25 +79,22 @@ class GameController extends ChangeNotifier {
 
     _currentNumber = target;
     _timeLeft = 20;
-    _isListening = false;
     notifyListeners();
+
+    // Auto-Restart mic if the game is already in progress
+    if (_isGameActive && _hasStarted) {
+      // CRITICAL: Delay prevents iOS EXC_BAD_ACCESS by giving the
+      // Audio Engine time to cycle off/on.
+      await Future.delayed(const Duration(milliseconds: 600));
+      startListening();
+    }
   }
 
-  // Triggered when Mic button is pressed
   void startListening() async {
     if (!_isGameActive || _isListening) return;
 
-    bool available = await _speech.initialize(
-      onStatus: (status) {
-        debugPrint('Speech status: $status');
-        // If it stops unexpectedly, reset our UI state
-        if (status == 'done' || status == 'notListening') {
-          _isListening = false;
-          notifyListeners();
-        }
-      },
-      onError: (error) => debugPrint('Speech error: $error'),
-    );
+    // Ensure engine is ready
+    bool available = await _speech.initialize();
 
     if (available) {
       _isListening = true;
@@ -90,17 +102,62 @@ class GameController extends ChangeNotifier {
       notifyListeners();
 
       await _speech.listen(
-        onResult: (result) {
-          // Use result.recognizedWords which updates as you talk
-          debugPrint("Recognized: ${result.recognizedWords}");
-          onSpeechResult(result.recognizedWords, result.finalResult);
-        },
+        onResult: (result) => onSpeechResult(result.recognizedWords, result.finalResult),
         listenFor: const Duration(seconds: 20),
-        pauseFor: const Duration(seconds: 5), // Wait 5s of silence before stopping
+        pauseFor: const Duration(seconds: 3),
         localeId: "en_US",
-        cancelOnError: false, // Don't stop the game on a single mic error
-        listenMode: ListenMode.dictation, // Use dictation for continuous stream
+        // Use true for real iPhone, false for Simulator
+        onDevice: Platform.isIOS && !Platform.environment.containsKey('SIMULATOR_HOST_NAME'),
+        cancelOnError: false,
+        listenMode: ListenMode.dictation,
       );
+    }
+  }
+
+  void onSpeechResult(String spokenText, bool isFinal) {
+    if (!_isGameActive || !_isListening) return;
+
+    debugPrint("Transcription: $spokenText (Final: $isFinal)");
+
+    // Clean formatting for matching
+    String cleanSpoken = spokenText.toLowerCase().replaceAll(',', '').replaceAll(' ', '').trim();
+    String targetDigit = _currentNumber.toString();
+
+    final numberWords = {
+      'one': '1', 'two': '2', 'three': '3', 'four': '4', 'five': '5',
+      'six': '6', 'seven': '7', 'eight': '8', 'nine': '9', 'zero': '0',
+    };
+
+    bool isCorrect = false;
+
+    // 1. Check for Correct Answer (Instant)
+    if (cleanSpoken.contains(targetDigit)) {
+      isCorrect = true;
+    } else {
+      numberWords.forEach((word, digit) {
+        if (digit == targetDigit && cleanSpoken.contains(word)) {
+          isCorrect = true;
+        }
+      });
+    }
+
+    if (isCorrect) {
+      debugPrint("🎯 Match Found: $targetDigit");
+      _speech.stop(); // Stop engine to clear buffer
+      _stopListeningAndAdvance(bonus: _timeLeft);
+      return;
+    }
+
+    // 2. Check for Wrong Answer (Only when user stops talking)
+    if (isFinal) {
+      final hasAnyNumber = RegExp(r'\d+').hasMatch(cleanSpoken);
+      bool hasAnyNumberWord = numberWords.keys.any((word) => cleanSpoken.contains(word));
+
+      if (hasAnyNumber || hasAnyNumberWord) {
+        debugPrint("❌ Wrong Answer: $spokenText");
+        _speech.stop();
+        _stopListeningAndAdvance(bonus: -_timeLeft);
+      }
     }
   }
 
@@ -118,84 +175,41 @@ class GameController extends ChangeNotifier {
 
   void _handleTimeout() {
     _timer?.cancel();
-    _score -= 20; // Deduct 20 points
+    _score -= 20;
     _questionCount++;
     _generateNewNumberOnly();
   }
+
   void _stopListeningAndAdvance({required int bonus}) {
     _timer?.cancel();
     _isListening = false;
 
-    _score += bonus; // This will subtract if bonus is negative
+    _score += bonus;
     _questionCount++;
 
-    debugPrint("Bonus Applied: $bonus | New Score: $_score");
+    debugPrint("Bonus: $bonus | Total: $_score");
 
-    if (_questionCount >= 30) {
-      _isGameActive = false;
+    if (_questionCount >= _maxQuestions) {
+      _stopGame();
     } else {
       _generateNewNumberOnly();
     }
     notifyListeners();
   }
 
-  // Update the parameter to include the 'isFinal' flag
-  void onSpeechResult(String spokenText, bool isFinal) {
-    if (!_isGameActive || !_isListening) return;
-
-    debugPrint("Transcription: $spokenText (Final: $isFinal)");
-
-    String targetDigit = _currentNumber.toString();
-    String cleanSpoken = spokenText.toLowerCase().trim();
-
-    final numberWords = {
-      'one': '1', 'two': '2', 'three': '3', 'four': '4', 'five': '5',
-      'six': '6', 'seven': '7', 'eight': '8', 'nine': '9', 'zero': '0',
-    };
-
-    bool isCorrect = false;
-
-    // --- 1. ALWAYS check for Correct Answer (Instant Win) ---
-    if (cleanSpoken.contains(targetDigit)) {
-      isCorrect = true;
-    } else {
-      numberWords.forEach((word, digit) {
-        if (digit == targetDigit && cleanSpoken.contains(word)) {
-          isCorrect = true;
-        }
-      });
-    }
-
-    if (isCorrect) {
-      debugPrint("🎯 Match Found: $targetDigit");
-      _speech.stop();
-      _stopListeningAndAdvance(bonus: _timeLeft);
-      return;
-    }
-
-    // --- 2. Check for Wrong Answer ONLY when user stops speaking (isFinal) ---
-    if (isFinal) {
-      final hasAnyNumber = RegExp(r'\d+').hasMatch(cleanSpoken);
-      bool hasAnyNumberWord = numberWords.keys.any((word) => cleanSpoken.contains(word));
-
-      if (hasAnyNumber || hasAnyNumberWord) {
-        debugPrint("❌ Final Wrong Number Detected: $spokenText");
-        _speech.stop();
-        _stopListeningAndAdvance(bonus: -_timeLeft);
-      }
-    }
-  }
-
   void _stopGame() {
     _isGameActive = false;
     _isListening = false;
+    _hasStarted = false;
     _timer?.cancel();
+    _speech.stop();
     notifyListeners();
   }
 
   @override
   void dispose() {
     _timer?.cancel();
+    _speech.stop();
     super.dispose();
   }
 }

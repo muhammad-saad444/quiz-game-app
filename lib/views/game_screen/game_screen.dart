@@ -34,6 +34,7 @@ class _SafariGameScreenState extends State<SafariGameScreen> {
 
     // 3. Start the game question
     controller.startNewGame(widget.digits, widget.hop);
+    // controller.startListening();
   }
 
   @override
@@ -95,7 +96,12 @@ class _SafariGameScreenState extends State<SafariGameScreen> {
                 Column(
                   children: [
                     GestureDetector(
-                      onTap: () => gameProvider.startListening(),
+                      onTap: () {
+                        if (!gameProvider.isListening) {
+                          // This starts the continuous listening loop
+                          gameProvider.pressPlayButton();
+                        }
+                      },
                       child: Pulse(
                         infinite: gameProvider.isListening,
                         animate: gameProvider.isListening,
