@@ -16,6 +16,31 @@ class _GameSetupScreenState extends State<GameSetupScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          "GAME SETUP",
+          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+        ),
+        centerTitle: true,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white),
+          onPressed: () {
+            Navigator.pop(context);
+          },
+        ),
+        // This is where the magic happens
+        flexibleSpace: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.bottomCenter,
+              end: Alignment.bottomCenter,
+              colors: [AppColors.bgTop, AppColors.bgBottom],
+            ),
+          ),
+        ),
+        elevation: 0, // Removes the shadow for a flat, seamless transition
+        backgroundColor: Colors.transparent, // Ensures the container shows through
+      ),
       body: Container(
         width: double.infinity,
         decoration: const BoxDecoration(

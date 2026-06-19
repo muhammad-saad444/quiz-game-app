@@ -13,15 +13,45 @@ class AuthController extends ChangeNotifier {
   bool _isLoading = false;
   bool get isLoading => _isLoading;
 
+  // Expose the raw Firebase User so your AuthWrapper can listen to verification state explicitly
+  User? get firebaseUser => _auth.currentUser;
+
   AuthController() {
-    // Listen to Auth State changes (Persistence)
+    // Listen to Auth State changes (Handles persistence & token variations)
     _auth.authStateChanges().listen((User? user) async {
       if (user != null) {
-        await fetchUserData(user.uid);
+        try {
+          // Force a quick reload to get the freshest data from the server
+          await user.reload();
+
+          // Grab the updated user reference after a successful server reload
+          User? refreshedUser = _auth.currentUser;
+
+          if (refreshedUser != null && refreshedUser.emailVerified) {
+            _isLoading = true;
+            notifyListeners();
+            await fetchUserData(refreshedUser.uid);
+          } else {
+            // Keep user model null if they haven't verified their inbox link yet
+            _userModel = null;
+          }
+        } on FirebaseAuthException catch (e) {
+          debugPrint("⚠️ Auth stream background reload error code: ${e.code}");
+
+          // 🎯 THE FIX: If the user was deleted from the console, clear the local session cache
+          if (e.code == 'user-not-found') {
+            debugPrint("Cleaning up corrupted local session cache for deleted user account.");
+            await _auth.signOut();
+            _userModel = null;
+          }
+        } catch (e) {
+          debugPrint("Generic exception caught on auth state reload hook: $e");
+        }
       } else {
         _userModel = null;
-        notifyListeners();
       }
+      _isLoading = false;
+      notifyListeners();
     });
   }
 
@@ -33,39 +63,55 @@ class AuthController extends ChangeNotifier {
   Future<void> fetchUserData(String uid) async {
     try {
       DocumentSnapshot doc = await _db.collection('users').doc(uid).get();
-      if (doc.exists) {
+      if (doc.exists && doc.data() != null) {
         _userModel = UserModel.fromMap(doc.data() as Map<String, dynamic>, doc.id);
+      } else {
+        _userModel = null;
+        debugPrint("User data fetching failed: Document does not exist in Firestore.");
       }
       notifyListeners();
     } catch (e) {
-      debugPrint("Error fetching user: $e");
+      _userModel = null;
+      notifyListeners();
+      debugPrint("CRITICAL ERROR: Failed to parse UserModel. Details: $e");
     }
   }
 
   Future<String?> login(String email, String password) async {
     _setLoading(true);
     try {
-      // 1. Perform Firebase Authentication
+      String sanitizedEmail = email.trim().toLowerCase();
+
       UserCredential credential = await _auth.signInWithEmailAndPassword(
-        email: email.trim(),
+        email: sanitizedEmail,
         password: password.trim(),
       );
 
-      // 2. IMPORTANT: Manually fetch user data immediately
-      // This ensures userModel is NOT null when the UI switches
+      // Explicit verification check gate during manual login attempts
+      if (!credential.user!.emailVerified) {
+        _setLoading(false);
+        await credential.user?.sendEmailVerification();
+        return "Please verify your email address first. A new verification link has been sent to your inbox.";
+      }
+
       await fetchUserData(credential.user!.uid);
 
-      // 3. Update the last login timestamp in Firestore
+      if (_userModel == null) {
+        _setLoading(false);
+        return "Profile data could not be recovered. Please contact support.";
+      }
+
       await _db.collection('users').doc(credential.user!.uid).update({
         'lastLogin': FieldValue.serverTimestamp(),
       });
 
       _setLoading(false);
-      return null; // Success
+      return null;
     } on FirebaseAuthException catch (e) {
       _setLoading(false);
-      // Return user-friendly error messages
-      if (e.code == 'user-not-found') return "No friend found with this email.";
+      if (e.code == 'user-not-found' || e.code == 'invalid-credential') {
+        return "Invalid login credentials. Please check your key or register as a new player.";
+      }
       if (e.code == 'wrong-password') return "Oops! That's the wrong secret key.";
       return e.message;
     } catch (e) {
@@ -74,32 +120,40 @@ class AuthController extends ChangeNotifier {
     }
   }
 
-  Future<String?> signUp(String email, String password) async {
+  Future<String?> signUp(String email, String password, String name) async {
     _setLoading(true);
     try {
-      // 1. Create the user in Firebase Auth
+      String sanitizedEmail = email.trim().toLowerCase();
+
+      // 1. Create the user inside Firebase Authentication
       UserCredential result = await _auth.createUserWithEmailAndPassword(
-          email: email.trim(),
+          email: sanitizedEmail,
           password: password.trim()
       );
 
-      // 2. Send the verification email immediately
+      // 2. Fire off the verification email immediately
       await result.user?.sendEmailVerification();
 
-      // 3. Create the local model and save to Firestore
-      _userModel = UserModel(
+      // 3. Prepare the database profile structure
+      UserModel newPlayer = UserModel(
           uid: result.user!.uid,
-          email: email.trim(),
-          lastLogin: DateTime.now()
+          email: sanitizedEmail,
+          name: name.trim(),
+          lastLogin: DateTime.now(),
+          currentQuestion: 1,
+          totalScore: 0,
+          scoreHistory: const {}
       );
 
-      await _db.collection('users').doc(result.user!.uid).set(_userModel!.toMap());
+      // 4. Save the record to your Firestore database collection
+      await _db.collection('users').doc(result.user!.uid).set(newPlayer.toMap());
 
-      // 4. Force a data fetch to ensure the Provider state is fully updated
-      await fetchUserData(result.user!.uid);
+      // 5. Ensure userModel stays null until email verification completes
+      _userModel = null;
 
       _setLoading(false);
-      return null; // Success
+      notifyListeners(); // Force stream dispatch to update AuthWrapper state
+      return null;
     } on FirebaseAuthException catch (e) {
       _setLoading(false);
       if (e.code == 'email-already-in-use') return "This email is already registered.";
@@ -114,22 +168,18 @@ class AuthController extends ChangeNotifier {
   Future<void> checkEmailVerified() async {
     _setLoading(true);
 
-    // 1. Force Firebase to fetch the latest user info from the server
+    // Force Firebase Auth to pull the absolute freshest metadata from the server
     await _auth.currentUser?.reload();
-
-    // 2. Get the updated user object
     User? user = _auth.currentUser;
 
     if (user != null && user.emailVerified) {
-      // 3. If verified, sync Firestore data
+      // Once verified, download their Firestore user profile configuration
       await fetchUserData(user.uid);
     } else {
-      // Optional: Show a snackbar or message if they haven't actually clicked the link yet
-      debugPrint("User still not verified.");
+      debugPrint("User clicked verification check, but status is still unverified.");
     }
 
     _setLoading(false);
-    // This trigger tells AuthWrapper to check the 'emailVerified' status again
     notifyListeners();
   }
 

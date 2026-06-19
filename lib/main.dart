@@ -24,7 +24,6 @@ void main() async {
     debugPrint("✅ Firebase Connected Successfully");
   } catch (e) {
     debugPrint("❌ Firebase Connection Failed: $e");
-    // You can handle critical initialization failure here if needed
   }
 
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
@@ -36,7 +35,6 @@ void main() async {
 }
 
 Future<void> requestPermissions() async {
-  // Check current status first
   var micStatus = await Permission.microphone.status;
   var speechStatus = await Permission.speech.status;
 
@@ -47,6 +45,7 @@ Future<void> requestPermissions() async {
     ].request();
   }
 }
+
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
@@ -89,50 +88,27 @@ class AuthWrapper extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final authController = Provider.of<AuthController>(context);
-    final User? firebaseUser = FirebaseAuth.instance.currentUser;
+    final User? firebaseUser = authController.firebaseUser;
 
-    // 1. If no user is logged in, show Login Screen
+    // GATE 1: Is anyone logged in?
     if (firebaseUser == null) {
       return LoginScreen();
     }
 
-    // 2. If logged in but data isn't loaded, show loader
-    // NOTE: If this spins forever, Firestore is either empty or unreachable.
+    // GATE 2: STOPS UNVERIFIED USERS HERE 🛑
+    // Firebase Auth creates the record, but this gate blocks them from moving forward!
+    if (!firebaseUser.emailVerified) {
+      return const VerifyEmailScreen();
+    }
+
+    // GATE 3: Downloader Sync Guard
     if (authController.userModel == null) {
-      return Scaffold(
-        backgroundColor: Colors.black,
-        body: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const CircularProgressIndicator(color: AppColors.primary),
-              const SizedBox(height: 20),
-              Text(
-                "Syncing Safari Data...",
-                style: TextStyle(color: Colors.white.withOpacity(0.7)),
-              ),
-            ],
-          ),
-        ),
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator(color: AppColors.primary)),
       );
     }
 
-    // 3. Check Session Expiry (24-hour logic)
-    final lastLogin = authController.userModel!.lastLogin;
-    if (lastLogin != null) {
-      final hoursPassed = DateTime.now().difference(lastLogin).inHours;
-      if (hoursPassed >= 24) {
-        // Log out on next frame to avoid build-phase navigation errors
-        Future.microtask(() => authController.logout());
-        return LoginScreen();
-      }
-    }
-
-    // 4. Verification Gate
-    if (firebaseUser.emailVerified) {
-      return const DashboardScreen();
-    } else {
-      return const VerifyEmailScreen();
-    }
+    // SUCCESS: Allowed into the game room
+    return const DashboardScreen();
   }
 }
