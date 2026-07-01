@@ -19,7 +19,7 @@ android {
     }
 
     kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_17.toString()
+        jvmTarget = "17"
     }
 
     defaultConfig {
@@ -27,21 +27,76 @@ android {
         applicationId = "com.example.realtime_answer_detector"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
-        targetSdk = flutter.targetSdkVersion
+
+        // 👇 FIXED: Explicitly upgraded minSdk to 30 to support local audio processing
+        minSdk = 30
+        targetSdk = 34
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
 
     buildTypes {
-        release {
+        getByName("release") {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
 }
 
 flutter {
     source = "../.."
+}
+
+// FIXED GRADLE STRIPPER HOOK:
+// Targets the exact legacy package signature 'org.vosk.vosk_flutter' to cleanly satisfy AGP criteria
+rootProject.subprojects {
+    afterEvaluate {
+        // --- Vosk Configuration Block ---
+        if (name == "vosk_flutter_2") {
+            extensions.findByName("android")?.let { androidExtension ->
+                @Suppress("UNCHECKED_CAST")
+                (androidExtension as? com.android.build.api.dsl.CommonExtension<*, *, *, *, *, *>)?.apply {
+                    namespace = "org.vosk.vosk_flutter_2"
+                }
+            }
+
+            tasks.matching { it.name.contains("process") && it.name.contains("Manifest") }.configureEach {
+                doFirst {
+                    val manifestFile = file("src/main/AndroidManifest.xml")
+                    if (manifestFile.exists()) {
+                        var content = manifestFile.readText()
+                        if (content.contains("package=\"org.vosk.vosk_flutter\"")) {
+                            content = content.replace("package=\"org.vosk.vosk_flutter\"", "")
+                            manifestFile.writeText(content)
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- LiveSpeechToText Configuration Block (Maintained for safety) ---
+        if (name == "livespeechtotext") {
+            extensions.findByName("android")?.let { androidExtension ->
+                @Suppress("UNCHECKED_CAST")
+                (androidExtension as? com.android.build.api.dsl.CommonExtension<*, *, *, *, *, *>)?.apply {
+                    namespace = "com.overmycloud.livespeechtotext"
+                }
+            }
+
+            tasks.matching { it.name.contains("process") && it.name.contains("Manifest") }.configureEach {
+                doFirst {
+                    val manifestFile = file("src/main/AndroidManifest.xml")
+                    if (manifestFile.exists()) {
+                        var content = manifestFile.readText()
+                        if (content.contains("package=\"com.overmycloud.livespeechtotext\"")) {
+                            content = content.replace("package=\"com.overmycloud.livespeechtotext\"", "")
+                            manifestFile.writeText(content)
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

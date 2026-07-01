@@ -36,15 +36,6 @@
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
-        <intent>
-            <action android:name="android.speech.RecognitionService" />
-        </intent>
-        <intent>
-            <action android:name="android.intent.action.VOICE_COMMAND" />
-        </intent>
-
-        <package android:name="com.google.android.googlequicksearchbox" />
-
         <package android:name="com.google.android.gms" />
     </queries>
 </manifest>

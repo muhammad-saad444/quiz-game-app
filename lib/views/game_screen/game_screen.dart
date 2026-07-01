@@ -72,6 +72,31 @@ class _SafariGameScreenState extends State<SafariGameScreen> with WidgetsBinding
         }
       },
       child: Scaffold(
+        appBar: AppBar(
+          title: const Text(
+            "GAME SCREEN",
+            style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+          ),
+          centerTitle: true,
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white),
+            onPressed: () {
+              Navigator.pop(context);
+            },
+          ),
+          // This is where the magic happens
+          flexibleSpace: Container(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.bottomCenter,
+                end: Alignment.bottomCenter,
+                colors: [AppColors.bgTop, AppColors.bgBottom],
+              ),
+            ),
+          ),
+          elevation: 0, // Removes the shadow for a flat, seamless transition
+          backgroundColor: Colors.transparent, // Ensures the container shows through
+        ),
         body: Stack(
           children: [
             Container(
@@ -156,8 +181,8 @@ class _SafariGameScreenState extends State<SafariGameScreen> with WidgetsBinding
           key: ValueKey(gameProvider.currentNumber),
           child: Column(
             children: [
-              Text(gameProvider.isListening ? "SPEAK NOW!" : (gameProvider.isPaused ? "READY?" : "WATCHING..."), style: const TextStyle(color: Colors.white54, letterSpacing: 4, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 10),
+              // Text(gameProvider.isListening ? "SPEAK NOW!" : (gameProvider.isPaused ? "READY?" : "WATCHING..."), style: const TextStyle(color: Colors.white54, letterSpacing: 4, fontWeight: FontWeight.bold)),
+              // const SizedBox(height: 10),
               Text(
                 "${gameProvider.currentNumber}",
                 style: TextStyle(

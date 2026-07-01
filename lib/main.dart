@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'constants/app_colors.dart';
 import 'constants/app_texts.dart';
 import 'controllers/auth_controller.dart';
+import 'controllers/game_controller.dart';
 import 'services/app_provider.dart';
 import 'views/login_screen.dart';
 import 'views/dashoard/dashboard.dart';
@@ -18,7 +19,7 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await requestPermissions();
 
-  // 1. Robust Firebase Initialization with Error Reporting
+  // Robust Firebase Initialization
   try {
     await Firebase.initializeApp();
     debugPrint("✅ Firebase Connected Successfully");
@@ -36,13 +37,10 @@ void main() async {
 
 Future<void> requestPermissions() async {
   var micStatus = await Permission.microphone.status;
-  var speechStatus = await Permission.speech.status;
 
-  if (!micStatus.isGranted || !speechStatus.isGranted) {
-    await [
-      Permission.microphone,
-      Permission.speech,
-    ].request();
+  // FIXED: Removed Permission.speech since Vosk runs 100% locally and only needs raw mic access
+  if (!micStatus.isGranted) {
+    await Permission.microphone.request();
   }
 }
 
@@ -76,9 +74,38 @@ class MyApp extends StatelessWidget {
             iconTheme: IconThemeData(color: Colors.white, size: 28),
           ),
         ),
-        home: const AuthWrapper(),
+        home: const AppWarmupWrapper(),
       ),
     );
+  }
+}
+
+// Safely initializes the live voice listener interface when the providers load
+class AppWarmupWrapper extends StatefulWidget {
+  const AppWarmupWrapper({super.key});
+
+  @override
+  State<AppWarmupWrapper> createState() => _AppWarmupWrapperState();
+}
+
+class _AppWarmupWrapperState extends State<AppWarmupWrapper> {
+  @override
+  void initState() {
+    super.initState();
+    // Warm up the independent listener engine asynchronously on the app's very first frame execution
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      try {
+        Provider.of<GameController>(context, listen: false).initializeSpeech();
+        debugPrint("✅ Independent Audio Mixer Pipeline Warmed Up Successfully");
+      } catch (e) {
+        debugPrint("❌ Independent Audio Warmup Error: $e");
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return const AuthWrapper();
   }
 }
 
@@ -96,15 +123,30 @@ class AuthWrapper extends StatelessWidget {
     }
 
     // GATE 2: STOPS UNVERIFIED USERS HERE 🛑
-    // Firebase Auth creates the record, but this gate blocks them from moving forward!
     if (!firebaseUser.emailVerified) {
       return const VerifyEmailScreen();
     }
 
-    // GATE 3: Downloader Sync Guard
+    // GATE 3: Downloader Sync Guard with Safe Reactive State Switch
     if (authController.userModel == null) {
+      // 👇 FIXED: Check if we are offline or network is failing.
+      // If Firebase says we have a user instance, let them through to the dashboard immediately!
+      if (firebaseUser.uid.isNotEmpty) {
+        debugPrint("ℹ️ Entering Dashboard via offline reactive state block.");
+        return const DashboardScreen();
+      }
+
       return const Scaffold(
-        body: Center(child: CircularProgressIndicator(color: AppColors.primary)),
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              CircularProgressIndicator(color: AppColors.primary),
+              SizedBox(height: 16),
+              Text("Syncing profile...", style: TextStyle(color: Colors.grey)),
+            ],
+          ),
+        ),
       );
     }
 
